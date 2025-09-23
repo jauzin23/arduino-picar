@@ -1,6 +1,10 @@
 #include <WiFi.h>
 #include <time.h>
 #include <TFT_eSPI.h>
+#include <Wire.h>
+#include <Adafruit_PN532.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 
 // WiFi credentials - CHANGE THESE TO YOUR NETWORK
 const char* ssid = "TP-Link_7DDE";
@@ -10,6 +14,14 @@ const char* password = "18152784";
 const char* ntpServer = "pt.pool.ntp.org";
 const long gmtOffset_sec = 0;      // Portugal is GMT+0 in winter
 const int daylightOffset_sec = 3600; // +1 hour for daylight saving
+
+// PN532 I2C setup
+#define PN532_SDA 25
+#define PN532_SCL 26
+Adafruit_PN532 nfc(PN532_SDA, PN532_SCL);
+
+// API endpoint
+const char* apiEndpoint = "http://192.168.1.68:3000/send-username";
 
 // TFT Display setup
 TFT_eSPI tft = TFT_eSPI();
@@ -27,6 +39,13 @@ unsigned long lastFrameTime = 0;
 int frameIndex = 0;
 const int frameCount = 3;
 const unsigned long frameDuration = 500;
+
+// NFC and welcome screen variables
+bool showWelcomeScreen = false;
+String welcomeUsername = "";
+unsigned long welcomeStartTime = 0;
+const unsigned long welcomeDisplayDuration = 5000; // 5 seconds
+bool nfcInitialized = false;
 
 // WiFi bitmaps (38x32)
 static const unsigned char PROGMEM image_wifi_not_connected_bits[] = {
@@ -174,6 +193,8 @@ static const uint8_t PROGMEM connect_button_frame0[] = {
  };
 
 
+
+
 const uint8_t* connectButtonFrames[frameCount] = {
   connect_button_frame0,
   connect_button_frame1,
@@ -207,10 +228,39 @@ void setup() {
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   }
   
+  // Initialize PN532
+  Wire.begin(PN532_SDA, PN532_SCL);
+  nfc.begin();
+  
+  uint32_t versiondata = nfc.getFirmwareVersion();
+  if (versiondata) {
+    Serial.print("Found chip PN5"); Serial.println((versiondata>>24) & 0xFF, HEX); 
+    Serial.print("Firmware ver. "); Serial.print((versiondata>>16) & 0xFF, DEC); 
+    Serial.print('.'); Serial.println((versiondata>>8) & 0xFF, DEC);
+    nfc.SAMConfig();
+    nfcInitialized = true;
+    Serial.println("PN532 initialized successfully");
+  } else {
+    Serial.println("Didn't find PN53x board");
+    nfcInitialized = false;
+  }
+  
   draw();
 }
 
 void loop() {
+  // Handle welcome screen timeout
+  if (showWelcomeScreen && millis() - welcomeStartTime >= welcomeDisplayDuration) {
+    showWelcomeScreen = false;
+    welcomeUsername = "";
+    draw(); // Redraw main screen
+  }
+  
+  // Only check for NFC if not showing welcome screen and NFC is initialized
+  if (!showWelcomeScreen && nfcInitialized) {
+    checkForNFC();
+  }
+  
   // Update time every second
   if (millis() - lastTimeUpdate >= timeUpdateInterval) {
     updateTime();
@@ -224,21 +274,164 @@ void loop() {
     wifiStatusChanged = true;
   }
   
-  // Update animation frame every 500ms
-  if (millis() - lastFrameTime >= frameDuration) {
+  // Update animation frame every 500ms (only if not showing welcome screen)
+  if (!showWelcomeScreen && millis() - lastFrameTime >= frameDuration) {
     frameIndex = (frameIndex + 1) % frameCount;
     lastFrameTime = millis();
     drawConnectButtonFrame(frameIndex);
   }
   
   // Redraw entire screen if needed
-  if (currentTime != previousTime || wifiStatusChanged) {
+  if (!showWelcomeScreen && (currentTime != previousTime || wifiStatusChanged)) {
     draw();
     previousTime = currentTime;
     wifiStatusChanged = false;
   }
   
   delay(50);
+}
+
+void checkForNFC() {
+  uint8_t success;
+  uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  // Buffer to store the returned UID
+  uint8_t uidLength;                        // Length of the UID (4 or 7 bytes depending on ISO14443A card type)
+  
+  success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 100);
+  
+  if (success) {
+    // Convert UID to hex string
+    String cardUID = "";
+    for (uint8_t i = 0; i < uidLength; i++) {
+      if (uid[i] < 0x10) cardUID += "0";
+      cardUID += String(uid[i], HEX);
+    }
+    cardUID.toUpperCase();
+    
+    Serial.println("NFC Card detected!");
+    Serial.print("UID: "); Serial.println(cardUID);
+    
+    // Send API request
+    sendUserRequest(cardUID);
+    
+    // Wait for card to be removed to prevent multiple reads
+    while (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 100)) {
+      delay(100);
+    }
+  }
+}
+
+void sendUserRequest(String cardUID) {
+  if (!wifiConnected) {
+    Serial.println("WiFi not connected, cannot send API request");
+    return;
+  }
+  
+  HTTPClient http;
+  http.begin(apiEndpoint);
+  http.addHeader("Content-Type", "application/json");
+  
+  // Create JSON payload
+  DynamicJsonDocument doc(1024);
+  doc["uid"] = cardUID;
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  Serial.print("Sending POST request to: "); Serial.println(apiEndpoint);
+  Serial.print("Payload: "); Serial.println(jsonString);
+  
+  int httpResponseCode = http.POST(jsonString);
+  
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.print("HTTP Response: "); Serial.println(httpResponseCode);
+    Serial.print("Response: "); Serial.println(response);
+    
+    // Parse JSON response
+    DynamicJsonDocument responseDoc(1024);
+    deserializeJson(responseDoc, response);
+    
+    if (responseDoc.containsKey("error")) {
+      String error = responseDoc["error"];
+      Serial.print("API Error: "); Serial.println(error);
+      showErrorMessage(error);
+    } else if (responseDoc.containsKey("username")) {
+      String username = responseDoc["username"];
+      Serial.print("Welcome user: "); Serial.println(username);
+      showWelcomeMessage(username);
+    } else {
+      Serial.println("Unknown response format");
+      showErrorMessage("Invalid response");
+    }
+  } else {
+    Serial.print("HTTP Error: "); Serial.println(httpResponseCode);
+    showErrorMessage("Connection failed");
+  }
+  
+  http.end();
+}
+
+void showWelcomeMessage(String username) {
+  showWelcomeScreen = true;
+  welcomeUsername = username;
+  welcomeStartTime = millis();
+  drawWelcomeScreen();
+}
+
+void showErrorMessage(String error) {
+  // Show error temporarily
+  tft.fillScreen(0xBDF7);
+  tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Top bar
+  
+  // Display time
+  tft.setTextColor(TFT_BLACK);
+  tft.setTextSize(4);
+  tft.setTextDatum(TL_DATUM);
+  tft.drawString(currentTime, 14, 9);
+  
+  // Display WiFi icon
+  if (wifiConnected) {
+    tft.drawBitmap(436, 8, image_wifi_connected_bits, 38, 32, TFT_BLACK);
+  } else {
+    tft.drawBitmap(436, 8, image_wifi_not_connected_bits, 38, 32, TFT_BLACK);
+  }
+  
+  // Show error message
+  tft.setTextSize(3);
+  tft.setTextColor(TFT_RED);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("ERRO:", 240, 130);
+  tft.setTextSize(2);
+  tft.drawString(error, 240, 170);
+  
+  delay(3000); // Show error for 3 seconds
+  draw(); // Return to main screen
+}
+
+void drawWelcomeScreen() {
+  tft.fillScreen(0xBDF7);             // Background
+  tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Top bar
+  
+  // Display time
+  tft.setTextColor(TFT_BLACK);
+  tft.setTextSize(4);
+  tft.setTextDatum(TL_DATUM);
+  tft.drawString(currentTime, 14, 9);
+  
+  // Display WiFi icon
+  if (wifiConnected) {
+    tft.drawBitmap(436, 8, image_wifi_connected_bits, 38, 32, TFT_BLACK);
+  } else {
+    tft.drawBitmap(436, 8, image_wifi_not_connected_bits, 38, 32, TFT_BLACK);
+  }
+  
+  // Welcome message (no middle box or button)
+  tft.setTextSize(3);
+  tft.setTextColor(TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("Bem vindo,", 240, 140);
+  tft.setTextSize(4);
+  tft.setTextColor(0x07E0); // Green color
+  tft.drawString(welcomeUsername, 240, 180);
 }
 
 void updateTime() {
@@ -278,6 +471,12 @@ void draw() {
   tft.setTextSize(1);
   tft.setTextColor(TFT_BLACK);
   if (!wifiConnected) tft.drawString("WiFi Disconnected", 10, 280);
+  
+  // NFC status
+  if (nfcInitialized) {
+  } else {
+    tft.drawString("NFC Error", 10, 290);
+  }
 }
 
 void drawConnectButtonFrame(int idx) {
