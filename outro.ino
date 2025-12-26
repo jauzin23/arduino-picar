@@ -666,6 +666,36 @@ void connectWebSocket() {
   }
 }
 
+bool checkAPIConnectivity() {
+  if (apiEndpoint == "") {
+    Serial.println("[API] Endpoint não configurado");
+    return false;
+  }
+  
+  HTTPClient http;
+  String healthUrl = apiEndpoint + "/health";
+  Serial.printf("[API] A verificar conectividade: %s\n", healthUrl.c_str());
+  
+  http.begin(healthUrl);
+  int httpResponseCode = http.GET();
+  
+  if (httpResponseCode > 0) {
+    Serial.printf("[API] Resposta: %d\n", httpResponseCode);
+    if (httpResponseCode == 200) {
+      Serial.println("[API] ✅ Conectividade API verificada");
+      http.end();
+      return true;
+    } else {
+      Serial.printf("[API] ❌ Código de resposta inesperado: %d\n", httpResponseCode);
+    }
+  } else {
+    Serial.printf("[API] ❌ Erro na ligação: %s\n", http.errorToString(httpResponseCode).c_str());
+  }
+  
+  http.end();
+  return false;
+}
+
 void sendHeartbeat() {
   if (wsConnected && (millis() - lastHeartbeat > heartbeatInterval)) {
     DynamicJsonDocument doc(256);
@@ -708,7 +738,7 @@ void setup() {
   tft.fillScreen(TFT_WHITE);
   tft.setTextColor(TFT_BLACK);
   tft.setTextSize(2);
-  tft.drawString("A Conectar ao WiFi...", 50, 150);
+  tft.drawString("A inicializar dispositivo...", 50, 150);
   
   // Carregar credenciais WiFi e configuração API guardadas
   loadWiFiCredentials();
@@ -753,30 +783,40 @@ void setup() {
       configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
       playSuccessSound();
       
-      // Extrair host do apiEndpoint (base URL) para WebSocket
-      if (apiEndpoint.startsWith("http://")) {
-        int hostStart = 7; // Após "http://"
-        int hostEnd = apiEndpoint.indexOf(':', hostStart);
-        if (hostEnd == -1) hostEnd = apiEndpoint.indexOf('/', hostStart);
-        if (hostEnd == -1) hostEnd = apiEndpoint.length();
-        
-        wsHost = apiEndpoint.substring(hostStart, hostEnd);
-        
-        // Extrair porta se existir
-        int portStart = apiEndpoint.indexOf(':', hostStart);
-        if (portStart != -1) {
-          int portEnd = apiEndpoint.indexOf('/', portStart);
-          if (portEnd == -1) portEnd = apiEndpoint.length();
-          String portStr = apiEndpoint.substring(portStart + 1, portEnd);
-          wsPort = portStr.toInt();
+      // Verificar conectividade da API
+      if (checkAPIConnectivity()) {
+        // Extrair host do apiEndpoint (base URL) para WebSocket
+        if (apiEndpoint.startsWith("http://")) {
+          int hostStart = 7; // Após "http://"
+          int hostEnd = apiEndpoint.indexOf(':', hostStart);
+          if (hostEnd == -1) hostEnd = apiEndpoint.indexOf('/', hostStart);
+          if (hostEnd == -1) hostEnd = apiEndpoint.length();
+          
+          wsHost = apiEndpoint.substring(hostStart, hostEnd);
+          
+          // Extrair porta se existir
+          int portStart = apiEndpoint.indexOf(':', hostStart);
+          if (portStart != -1) {
+            int portEnd = apiEndpoint.indexOf('/', portStart);
+            if (portEnd == -1) portEnd = apiEndpoint.length();
+            String portStr = apiEndpoint.substring(portStart + 1, portEnd);
+            wsPort = portStr.toInt();
+          }
+          
+          Serial.printf("API Base URL: %s\n", apiEndpoint.c_str());
+          Serial.printf("Extracted WS Host: %s:%d\n", wsHost.c_str(), wsPort);
+          
+          // Conectar WebSocket
+          connectWebSocket();
+          sendLog("info", "Dispositivo iniciado e conectado");
         }
-        
-        Serial.printf("API Base URL: %s\n", apiEndpoint.c_str());
-        Serial.printf("Extracted WS Host: %s:%d\n", wsHost.c_str(), wsPort);
-        
-        // Conectar WebSocket
-        connectWebSocket();
-        sendLog("info", "Dispositivo iniciado e conectado");
+      } else {
+        Serial.println("❌ Falha na conectividade da API!");
+        Serial.println("Verifique a configuração da API e rede.");
+        wifiFailedMode = true;
+        playErrorSound();
+        drawWiFiFailedScreen();
+        return; // Não continuar se API não estiver acessível
       }
       
       draw();
