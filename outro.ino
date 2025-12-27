@@ -10,7 +10,6 @@
 using fs::FS;         // Correção para conflito de namespace WebServer no ESP32 3.x
 #include <WebServer.h>
 #include <DNSServer.h>
-#include <WebSocketsClient.h>
 
 // Objeto de preferências para armazenamento persistente
 Preferences preferences;
@@ -19,21 +18,16 @@ Preferences preferences;
 String ssid = "";
 String password = "";
 
-// Configuração da API - será substituída pelos valores armazenados
+// Configuração da API
 String apiEndpoint = "";
-String wsHost = "";  // WebSocket host (e.g., "192.168.1.68")
-int wsPort = 3000;    // WebSocket port
+String apiHost = "";
+int apiPort = 80;     // Porta HTTP padrão
 
 // Device ID e informações
 String deviceId = "ESP32-001";  // ID único deste dispositivo
 String deviceName = "Entrada Principal";  // Nome do dispositivo
 String deviceLocation = "Receção";  // Localização física
-
-// WebSocket client
-WebSocketsClient webSocket;
-bool wsConnected = false;
-unsigned long lastHeartbeat = 0;
-const unsigned long heartbeatInterval = 30000; // 30 segundos
+String firmwareVersion = "1.0.0";
 
 // Modo de vinculação de cartão
 bool enrollmentMode = false;
@@ -80,6 +74,14 @@ String previousTime = "";
 bool wifiStatusChanged = false;
 unsigned long lastTimeUpdate = 0;
 const unsigned long timeUpdateInterval = 1000;
+
+// Heartbeat variables
+unsigned long lastHeartbeat = 0;
+const unsigned long heartbeatInterval = 30000; // 30 segundos
+
+// Enrollment polling variables
+unsigned long lastEnrollmentCheck = 0;
+const unsigned long enrollmentCheckInterval = 5000; // Check every 5 seconds
 
 // Variáveis de animação
 unsigned long lastFrameTime = 0;
@@ -301,7 +303,7 @@ void loadWiFiCredentials() {
 
 void loadAPIConfig() {
   preferences.begin("api", false);
-  apiEndpoint = preferences.getString("endpoint", "http://192.168.1.68:3000/clock");  // Valor padrão de reserva
+  apiEndpoint = preferences.getString("endpoint", "http://192.168.1.68:3000");  // Valor padrão de reserva
   preferences.end();
   
   Serial.println("Loaded API configuration:");
@@ -399,7 +401,7 @@ void handleRoot() {
   html += "<circle cx='50' cy='50' r='45' fill='none' stroke='#ffffff' stroke-width='0.5' opacity='0.2'/>";
   html += "<g transform='translate(50,50) scale(1.3) translate(-50,-50)'>";
   html += "<path d='M30 45 Q30 35 40 35 Q45 30 50 30 Q55 30 60 35 Q70 35 70 45 Q70 50 65 50 L65 60 Q65 65 60 65 L40 65 Q35 65 35 60 L35 50 Q30 50 30 45 Z' fill='#ffffff' stroke='#e2e8f0' stroke-width='2'/>";
-  html += "<ellipse cx='45' cy='42' rx='3' ry='2' fill='#ffffff' opacity='0.7'/></g></svg>";
+  html += "<ellipse cx='45' cy='42' rx='3' ry='2' fill='#ffffff' opacity='0.7'/></g></svg></svg>";
   html += "<h1>MESA+ EQUIPAMENTO - CONFIGURACAO</h1>";
   html += "<form action='/save' method='POST'>";
   
@@ -442,101 +444,6 @@ void handleSave() {
     ESP.restart();  // Reiniciar para conectar com as novas credenciais
   } else {
     server.send(400, "text/plain", "Missing parameters");
-  }
-}
-
-// WebSocket event handler
-void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
-  switch(type) {
-    case WStype_DISCONNECTED: {
-      Serial.println("[WS] Desconectado!");
-      wsConnected = false;
-      break;
-    }
-      
-    case WStype_CONNECTED: {
-      Serial.println("[WS] Conectado!");
-      wsConnected = true;
-      
-      // Registar dispositivo
-      DynamicJsonDocument doc(512);
-      doc["event"] = "registar";
-      doc["device_id"] = deviceId;
-      doc["nome"] = deviceName;
-      doc["localizacao"] = deviceLocation;
-      
-      String jsonString;
-      serializeJson(doc, jsonString);
-      webSocket.sendTXT(jsonString);
-      
-      Serial.println("[WS] Dispositivo registado");
-      break;
-    }
-      
-    case WStype_TEXT: {
-      Serial.printf("[WS] Mensagem recebida: %s\n", payload);
-      
-      // Parse JSON message
-      DynamicJsonDocument msg(1024);
-      DeserializationError error = deserializeJson(msg, payload, length);
-      
-      if (error) {
-        Serial.print("[WS] Erro ao analisar JSON: ");
-        Serial.println(error.c_str());
-        return;
-      }
-      
-      String event = msg["event"];
-      
-      if (event == "registado") {
-        Serial.println("[WS] Registo confirmado pelo servidor");
-      }
-      else if (event == "vinculacao:iniciar") {
-        // Iniciar modo de vinculação de cartão
-        enrollmentMode = true;
-        enrollmentCode = msg["codigo"].as<String>();
-        enrollmentUserName = msg["userName"].as<String>();
-        enrollmentStartTime = millis();
-        
-        Serial.println("[WS] Modo de vinculação iniciado");
-        Serial.printf("  Código: %s\n", enrollmentCode.c_str());
-        Serial.printf("  Utilizador: %s\n", enrollmentUserName.c_str());
-        
-        drawEnrollmentScreen(enrollmentUserName, enrollmentCode);
-      }
-      else if (event == "vinculacao:sucesso") {
-        Serial.println("[WS] Vinculação bem-sucedida!");
-        String userName = msg["userName"].as<String>();
-        drawEnrollmentSuccess(userName);
-        
-        delay(3000);
-        enrollmentMode = false;
-        enrollmentCode = "";
-        enrollmentUserName = "";
-        draw();
-      }
-      else if (event == "vinculacao:erro") {
-        Serial.println("[WS] Erro na vinculação");
-        String errorMsg = msg["mensagem"].as<String>();
-        drawEnrollmentError(errorMsg);
-        
-        delay(3000);
-        enrollmentMode = false;
-        enrollmentCode = "";
-        enrollmentUserName = "";
-        draw();
-      }
-      else if (event == "erro") {
-        String errorMsg = msg["mensagem"].as<String>();
-        Serial.printf("[WS] Erro do servidor: %s\n", errorMsg.c_str());
-      }
-      break;
-    }
-      
-    case WStype_ERROR: {
-      Serial.println("[WS] Erro!");
-      break;
-    }
   }
 }
 
@@ -648,24 +555,6 @@ void drawEnrollmentError(String errorMsg) {
   tft.drawString(errorMsg, 240, 240);
 }
 
-void connectWebSocket() {
-  if (wsHost != "" && wsHost != "http://" && wsHost != "https://") {
-    Serial.println("[WS] A conectar ao servidor WebSocket...");
-    Serial.printf("[WS] Host: %s, Port: %d, Path: /dispositivos\n", wsHost.c_str(), wsPort);
-    Serial.printf("[WS] Full URL: ws://%s:%d/dispositivos\n", wsHost.c_str(), wsPort);
-    
-    webSocket.begin(wsHost, wsPort, "/dispositivos");
-    webSocket.onEvent(webSocketEvent);
-    webSocket.setReconnectInterval(5000);
-    webSocket.enableHeartbeat(15000, 3000, 2); // Ping a cada 15s, timeout 3s, 2 tentativas
-    
-    Serial.println("[WS] WebSocket inicializado");
-  } else {
-    Serial.println("[WS] Host não configurado, a ignorar WebSocket");
-    Serial.printf("[WS] wsHost atual: '%s'\n", wsHost.c_str());
-  }
-}
-
 bool checkAPIConnectivity() {
   if (apiEndpoint == "") {
     Serial.println("[API] Endpoint não configurado");
@@ -696,31 +585,118 @@ bool checkAPIConnectivity() {
   return false;
 }
 
+// Heartbeat function to send life signals to API
 void sendHeartbeat() {
-  if (wsConnected && (millis() - lastHeartbeat > heartbeatInterval)) {
-    DynamicJsonDocument doc(256);
-    doc["event"] = "heartbeat";
+  if (!wifiConnected || apiEndpoint == "") {
+    return;
+  }
+  
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastHeartbeat >= heartbeatInterval) {
+    Serial.println("[HEARTBEAT] Enviando sinal de vida...");
+    
+    HTTPClient http;
+    String heartbeatUrl = apiEndpoint + "/api/presencas/dispositivos/" + deviceId + "/heartbeat";
+    
+    http.begin(heartbeatUrl);
+    http.addHeader("Content-Type", "application/json");
+    
+    DynamicJsonDocument doc(512);
+    doc["nome"] = deviceName;
+    doc["localizacao"] = deviceLocation;
+    doc["firmware_version"] = firmwareVersion;
+    doc["ip_address"] = WiFi.localIP().toString();
     
     String jsonString;
     serializeJson(doc, jsonString);
-    webSocket.sendTXT(jsonString);
     
-    lastHeartbeat = millis();
-    Serial.println("[WS] Heartbeat enviado");
+    int httpResponseCode = http.POST(jsonString);
+    
+    if (httpResponseCode > 0) {
+      if (httpResponseCode == 200) {
+        Serial.println("[HEARTBEAT] ✅ Sinal de vida enviado com sucesso");
+      } else {
+        Serial.printf("[HEARTBEAT] ❌ Código de resposta: %d\n", httpResponseCode);
+      }
+    } else {
+      Serial.printf("[HEARTBEAT] ❌ Erro na ligação: %s\n", http.errorToString(httpResponseCode).c_str());
+    }
+    
+    http.end();
+    lastHeartbeat = currentMillis;
   }
 }
 
-void sendLog(String level, String message) {
-  if (wsConnected) {
-    DynamicJsonDocument doc(512);
-    doc["event"] = "log";
-    doc["nivel"] = level;
-    doc["mensagem"] = message;
-    
-    String jsonString;
-    serializeJson(doc, jsonString);
-    webSocket.sendTXT(jsonString);
+// Check enrollment status from API
+void checkEnrollmentStatus() {
+  if (!wifiConnected || apiEndpoint == "" || enrollmentMode) {
+    return;
   }
+  
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastEnrollmentCheck >= enrollmentCheckInterval) {
+    Serial.println("[ENROLLMENT] Verificando status de vinculação...");
+    
+    HTTPClient http;
+    String enrollmentUrl = apiEndpoint + "/api/presencas/dispositivos/" + deviceId + "/enrollment-status";
+    
+    http.begin(enrollmentUrl);
+    int httpResponseCode = http.GET();
+    
+    if (httpResponseCode > 0) {
+      if (httpResponseCode == 200) {
+        String response = http.getString();
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, response);
+        
+        if (!error) {
+          bool enrollmentActive = doc["enrollmentActive"];
+          if (enrollmentActive && !enrollmentMode) {
+            // Start enrollment mode
+            enrollmentMode = true;
+            enrollmentCode = doc["codigo"].as<String>();
+            enrollmentUserName = doc["userName"].as<String>();
+            enrollmentStartTime = millis();
+            
+            Serial.println("[ENROLLMENT] Modo de vinculação iniciado");
+            Serial.printf("  Código: %s\n", enrollmentCode.c_str());
+            Serial.printf("  Utilizador: %s\n", enrollmentUserName.c_str());
+            
+            drawEnrollmentScreen(enrollmentUserName, enrollmentCode);
+            playSuccessSound();
+          }
+        }
+      }
+    }
+    
+    http.end();
+    lastEnrollmentCheck = currentMillis;
+  }
+}
+
+// Send log to API
+void sendLog(String level, String message) {
+  if (!wifiConnected || apiEndpoint == "") {
+    return;
+  }
+  
+  HTTPClient http;
+  String logUrl = apiEndpoint + "/api/presencas/dispositivos/" + deviceId + "/log";
+  
+  http.begin(logUrl);
+  http.addHeader("Content-Type", "application/json");
+  
+  DynamicJsonDocument doc(512);
+  doc["tipo_log"] = "device_log";
+  doc["mensagem"] = message;
+  doc["nivel"] = level;
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  // Don't wait for response to avoid blocking
+  http.POST(jsonString);
+  http.end();
 }
 
 void setup() {
@@ -785,31 +761,11 @@ void setup() {
       
       // Verificar conectividade da API
       if (checkAPIConnectivity()) {
-        // Extrair host do apiEndpoint (base URL) para WebSocket
-        if (apiEndpoint.startsWith("http://")) {
-          int hostStart = 7; // Após "http://"
-          int hostEnd = apiEndpoint.indexOf(':', hostStart);
-          if (hostEnd == -1) hostEnd = apiEndpoint.indexOf('/', hostStart);
-          if (hostEnd == -1) hostEnd = apiEndpoint.length();
-          
-          wsHost = apiEndpoint.substring(hostStart, hostEnd);
-          
-          // Extrair porta se existir
-          int portStart = apiEndpoint.indexOf(':', hostStart);
-          if (portStart != -1) {
-            int portEnd = apiEndpoint.indexOf('/', portStart);
-            if (portEnd == -1) portEnd = apiEndpoint.length();
-            String portStr = apiEndpoint.substring(portStart + 1, portEnd);
-            wsPort = portStr.toInt();
-          }
-          
-          Serial.printf("API Base URL: %s\n", apiEndpoint.c_str());
-          Serial.printf("Extracted WS Host: %s:%d\n", wsHost.c_str(), wsPort);
-          
-          // Conectar WebSocket
-          connectWebSocket();
-          sendLog("info", "Dispositivo iniciado e conectado");
-        }
+        Serial.printf("API Base URL: %s\n", apiEndpoint.c_str());
+        
+        // Send initial heartbeat
+        sendHeartbeat();
+        sendLog("info", "Dispositivo iniciado e conectado");
       } else {
         Serial.println("❌ Falha na conectividade da API!");
         Serial.println("Verifique a configuração da API e rede.");
@@ -836,6 +792,7 @@ void setup() {
 
 void loop() {
   noTone(buzzerPin); // Force buzzer off at the start of every loop
+  
   // Gerir modo de configuração WiFi
   if (wifiConfigMode) {
     dnsServer.processNextRequest();
@@ -843,23 +800,17 @@ void loop() {
     return;  // Não fazer mais nada no modo de configuração
   }
   
-  // Processar eventos WebSocket
+  // Send heartbeat every 30 seconds
   if (wifiConnected) {
-    webSocket.loop();
     sendHeartbeat();
     
-    // Auto-reconectar WebSocket se desconectado
-    static unsigned long lastReconnectAttempt = 0;
-    if (!wsConnected && (millis() - lastReconnectAttempt > 5000)) {
-      Serial.println("[WS] Tentando reconectar...");
-      connectWebSocket();
-      lastReconnectAttempt = millis();
-    }
+    // Check enrollment status periodically
+    checkEnrollmentStatus();
   }
   
   // Verificar timeout do modo de vinculação
   if (enrollmentMode && (millis() - enrollmentStartTime > enrollmentTimeout)) {
-    Serial.println("[WS] Timeout do modo de vinculação");
+    Serial.println("[ENROLLMENT] Timeout do modo de vinculação");
     enrollmentMode = false;
     enrollmentCode = "";
     enrollmentUserName = "";
@@ -887,7 +838,6 @@ void loop() {
     Serial.println("\n=== STATUS ===");
     Serial.printf("WiFi: %s\n", wifiConnected ? "CONECTADO" : "DESCONECTADO");
     Serial.printf("NFC: %s\n", nfcInitialized ? "OK" : "ERRO");
-    Serial.printf("WebSocket: %s\n", wsConnected ? "CONECTADO" : "DESCONECTADO");
     Serial.printf("Enrollment Mode: %s\n", enrollmentMode ? "SIM" : "NAO");
     Serial.printf("Welcome Screen: %s\n", showWelcomeScreen ? "SIM" : "NAO");
     Serial.println("Aguardando cartões...");
@@ -1108,8 +1058,16 @@ void checkForNFC() {
           enrollmentUserName = "";
           draw();
         } else {
-          // Sucesso será tratado via WebSocket
+          // Enrollment success
+          String userName = responseDoc["name"].as<String>();
+          drawEnrollmentSuccess(userName);
           sendLog("info", "Cartão vinculado com sucesso: " + cardUID);
+          
+          delay(3000);
+          enrollmentMode = false;
+          enrollmentCode = "";
+          enrollmentUserName = "";
+          draw();
         }
       } else {
         drawEnrollmentError("Erro de conexao");
