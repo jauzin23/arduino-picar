@@ -23,6 +23,9 @@ String apiEndpoint = "";
 String apiHost = "";
 int apiPort = 80;     // Porta HTTP padrão
 
+// API Security - IMPORTANTE: Manter este valor em segredo!
+const String ESP32_API_KEY = "sk_esp32_7k9mP2xQ8vR5nL3wJ6tY4hB1cD9fG0sA";  // Chave API única para este dispositivo
+
 // Device ID e informações
 String deviceId = "ESP32-001";  // ID único deste dispositivo
 String deviceName = "Entrada Principal";  // Nome do dispositivo
@@ -48,6 +51,8 @@ const int ADMIN_CARDS_COUNT = sizeof(ADMIN_CARDS) / sizeof(ADMIN_CARDS[0]);
 WebServer server(80);
 DNSServer dnsServer;
 const byte DNS_PORT = 53;
+String apPassword = "";  // Senha gerada aleatoriamente para o AP
+String apName = "";  // Nome do AP com dígitos aleatórios
 
 // Configurações do servidor NTP para Portugal
 const char* ntpServer = "pt.pool.ntp.org";
@@ -349,17 +354,33 @@ void startConfigPortal() {
   wifiConfigMode = true;
   wifiFailedMode = false;
   
+  // Gerar senha aleatória de 8 dígitos
+  apPassword = "";
+  for (int i = 0; i < 8; i++) {
+    apPassword += String(random(0, 10));
+  }
+  
+  // Gerar nome do AP com 4 dígitos aleatórios
+  apName = "MESAPLUS-CONFIG-";
+  for (int i = 0; i < 4; i++) {
+    apName += String(random(0, 10));
+  }
+  
   // Parar qualquer ligação WiFi existente
   WiFi.disconnect();
   delay(100);
   
   // Iniciar Ponto de Acesso
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("MESAPLUS-CONFIG", "12345678");  // Nome e senha do AP
+  WiFi.softAP(apName.c_str(), apPassword.c_str());  // Nome e senha do AP
   
   IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP Name: ");
+  Serial.println(apName);
   Serial.print("AP IP address: ");
   Serial.println(IP);
+  Serial.print("AP Password: ");
+  Serial.println(apPassword);
   
   // Iniciar servidor DNS para portal cativo
   dnsServer.start(DNS_PORT, "*", IP);
@@ -402,17 +423,16 @@ void handleRoot() {
   html += "<g transform='translate(50,50) scale(1.3) translate(-50,-50)'>";
   html += "<path d='M30 45 Q30 35 40 35 Q45 30 50 30 Q55 30 60 35 Q70 35 70 45 Q70 50 65 50 L65 60 Q65 65 60 65 L40 65 Q35 65 35 60 L35 50 Q30 50 30 45 Z' fill='#ffffff' stroke='#e2e8f0' stroke-width='2'/>";
   html += "<ellipse cx='45' cy='42' rx='3' ry='2' fill='#ffffff' opacity='0.7'/></g></svg></svg>";
-  html += "<h1>MESA+ EQUIPAMENTO - CONFIGURACAO</h1>";
+  html += "<h1>MESA+ EQUIPAMENTO</h1>";
   html += "<form action='/save' method='POST'>";
   
   html += "<h2>📡 WiFi</h2>";
   html += "<label>SSID do WiFi:</label><input type='text' name='ssid' placeholder='Nome da rede WiFi' value='" + ssid + "' required>";
-  html += "<label>Palavra-passe WiFi:</label><input type='password' name='password' placeholder='Palavra-passe da rede' value='" + password + "' required>";
   
   html += "<h2>🌐 API</h2>";
   html += "<label>URL Base da API:</label>";
   html += "<input type='text' name='api' placeholder='http://192.168.1.89:3001' value='" + apiEndpoint + "' required>";
-  html += "<div class='note'>Exemplo: http://192.168.1.89:3001 (SEM /api/ponto)</div>";
+  html += "<div class='note'>Exemplo: http://192.168.1.89:3001</div>";
   
   html += "<button type='submit'>Guardar e Reiniciar</button>";
   html += "</form></div></body></html>";
@@ -421,12 +441,12 @@ void handleRoot() {
 }
 
 void handleSave() {
-  if (server.hasArg("ssid") && server.hasArg("password") && server.hasArg("api")) {
+  if (server.hasArg("ssid") && server.hasArg("api")) {
     String newSSID = server.arg("ssid");
-    String newPassword = server.arg("password");
     String newAPI = server.arg("api");
     
-    saveWiFiCredentials(newSSID, newPassword);
+    // Manter a password existente ao guardar apenas o SSID
+    saveWiFiCredentials(newSSID, password);
     saveAPIConfig(newAPI);
     
     String html = "<!DOCTYPE html><html><head>";
@@ -448,39 +468,39 @@ void handleSave() {
 }
 
 void drawEnrollmentScreen(String userName, String code) {
-  tft.fillScreen(0x07FF);  // Cyan background
-  tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Top bar
+  tft.fillScreen(0x07FF);  // Fundo ciano
+  tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Barra superior
   
-  // Display time
+  // Exibir hora
   tft.setTextColor(TFT_BLACK);
   tft.setTextSize(4);
   tft.setTextDatum(TL_DATUM);
   tft.drawString(currentTime, 14, 9);
   
-  // Display WiFi icon
+  // Exibir ícone WiFi
   if (wifiConnected) {
     tft.drawBitmap(436, 8, image_wifi_connected_bits, 38, 32, TFT_BLACK);
   } else {
     tft.drawBitmap(436, 8, image_wifi_not_connected_bits, 38, 32, TFT_BLACK);
   }
   
-  // Title
+  // Título
   tft.setTextSize(3);
   tft.setTextColor(TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
   tft.drawString("MODO DE VINCULACAO", 240, 100);
   
-  // User name
+  // Nome do usuário
   tft.setTextSize(4);
-  tft.setTextColor(0x001F);  // Blue
+  tft.setTextColor(0x001F);  // Azul
   tft.drawString(userName, 240, 140);
   
-  // Code
+  // Código
   tft.setTextSize(2);
   tft.setTextColor(TFT_BLACK);
   tft.drawString("Codigo: " + code, 240, 180);
   
-  // Instruction
+  // Instrução
   tft.setTextSize(3);
   tft.setTextColor(TFT_BLACK);
   tft.drawString("Aproxime o cartao NFC", 240, 230);
@@ -488,57 +508,53 @@ void drawEnrollmentScreen(String userName, String code) {
 }
 
 void drawEnrollmentSuccess(String userName) {
-  tft.fillScreen(0x07E0);  // Green background
-  tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Top bar
+  tft.fillScreen(0x07E0);  // Fundo verde
+  tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Barra superior
   
-  // Display time
+  // Exibir hora
   tft.setTextColor(TFT_BLACK);
   tft.setTextSize(4);
   tft.setTextDatum(TL_DATUM);
   tft.drawString(currentTime, 14, 9);
   
-  // Display WiFi icon
+  // Exibir ícone WiFi
   if (wifiConnected) {
     tft.drawBitmap(436, 8, image_wifi_connected_bits, 38, 32, TFT_BLACK);
   } else {
     tft.drawBitmap(436, 8, image_wifi_not_connected_bits, 38, 32, TFT_BLACK);
   }
   
-  // Success icon (checkmark)
-  tft.fillCircle(240, 120, 50, TFT_WHITE);
-  tft.fillCircle(240, 120, 45, 0x07E0);
-  tft.setTextSize(6);
-  tft.setTextColor(TFT_WHITE);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("✓", 243, 120);
-  
-  // Success message
+  // Mensagem de sucesso
   tft.setTextSize(3);
   tft.setTextColor(TFT_WHITE);
-  tft.drawString("VINCULACAO SUCESSO!", 240, 200);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("VINCULADO COM SUCESSO!", 240, 140);
   
+  // Nome do usuário
   tft.setTextSize(4);
-  tft.drawString(userName, 240, 240);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString(userName, 240, 200);
 }
 
 void drawEnrollmentError(String errorMsg) {
-  tft.fillScreen(0xF800);  // Red background
-  tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Top bar
+  tft.fillScreen(0xF800);  // Fundo vermelho
+  tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Barra superior
   
-  // Display time
+  // Exibir hora
   tft.setTextColor(TFT_BLACK);
   tft.setTextSize(4);
   tft.setTextDatum(TL_DATUM);
   tft.drawString(currentTime, 14, 9);
   
-  // Display WiFi icon
+  // Exibir ícone WiFi
   if (wifiConnected) {
     tft.drawBitmap(436, 8, image_wifi_connected_bits, 38, 32, TFT_BLACK);
   } else {
     tft.drawBitmap(436, 8, image_wifi_not_connected_bits, 38, 32, TFT_BLACK);
   }
   
-  // Error icon
+  // Ícone de erro
   tft.fillCircle(240, 120, 50, TFT_WHITE);
   tft.fillCircle(240, 120, 45, 0xF800);
   tft.setTextSize(6);
@@ -546,7 +562,7 @@ void drawEnrollmentError(String errorMsg) {
   tft.setTextDatum(MC_DATUM);
   tft.drawString("X", 243, 120);
   
-  // Error message
+  // Mensagem de erro
   tft.setTextSize(3);
   tft.setTextColor(TFT_WHITE);
   tft.drawString("ERRO NA VINCULACAO", 240, 200);
@@ -585,33 +601,31 @@ bool checkAPIConnectivity() {
   return false;
 }
 
-// Heartbeat function to send life signals to API
+// Função de heartbeat para enviar sinais de vida para a API
 void sendHeartbeat() {
+  sendHeartbeat(false);
+}
+
+// Versão sobrecarregada para forçar heartbeat imediato
+void sendHeartbeat(bool force) {
   if (!wifiConnected || apiEndpoint == "") {
     return;
   }
-  
   unsigned long currentMillis = millis();
-  if (currentMillis - lastHeartbeat >= heartbeatInterval) {
+  if (force || (currentMillis - lastHeartbeat >= heartbeatInterval)) {
     Serial.println("[HEARTBEAT] Enviando sinal de vida...");
-    
     HTTPClient http;
     String heartbeatUrl = apiEndpoint + "/api/presencas/dispositivos/" + deviceId + "/heartbeat";
-    
     http.begin(heartbeatUrl);
     http.addHeader("Content-Type", "application/json");
-    
     DynamicJsonDocument doc(512);
     doc["nome"] = deviceName;
     doc["localizacao"] = deviceLocation;
     doc["firmware_version"] = firmwareVersion;
     doc["ip_address"] = WiFi.localIP().toString();
-    
     String jsonString;
     serializeJson(doc, jsonString);
-    
     int httpResponseCode = http.POST(jsonString);
-    
     if (httpResponseCode > 0) {
       if (httpResponseCode == 200) {
         Serial.println("[HEARTBEAT] ✅ Sinal de vida enviado com sucesso");
@@ -621,7 +635,6 @@ void sendHeartbeat() {
     } else {
       Serial.printf("[HEARTBEAT] ❌ Erro na ligação: %s\n", http.errorToString(httpResponseCode).c_str());
     }
-    
     http.end();
     lastHeartbeat = currentMillis;
   }
@@ -674,7 +687,7 @@ void checkEnrollmentStatus() {
   }
 }
 
-// Send log to API
+// Enviar log para a API
 void sendLog(String level, String message) {
   if (!wifiConnected || apiEndpoint == "") {
     return;
@@ -694,7 +707,7 @@ void sendLog(String level, String message) {
   String jsonString;
   serializeJson(doc, jsonString);
   
-  // Don't wait for response to avoid blocking
+  // Não aguardar resposta para evitar bloqueio
   http.POST(jsonString);
   http.end();
 }
@@ -706,11 +719,11 @@ void setup() {
   // Inicializar pino do buzzer
   pinMode(buzzerPin, OUTPUT);
   digitalWrite(buzzerPin, LOW);
-  noTone(buzzerPin); // Ensure buzzer is off after setup
+  noTone(buzzerPin); // Garantir que o buzzer está desligado após a configuração
   
   // Inicializar ecrã TFT
   tft.init();
-  tft.setRotation(1); // Modo paisagem 480x320
+  tft.setRotation(3); // Invertido: paisagem 480x320 (tela invertida)
   tft.fillScreen(TFT_WHITE);
   tft.setTextColor(TFT_BLACK);
   tft.setTextSize(2);
@@ -762,9 +775,9 @@ void setup() {
       // Verificar conectividade da API
       if (checkAPIConnectivity()) {
         Serial.printf("API Base URL: %s\n", apiEndpoint.c_str());
-        
-        // Send initial heartbeat
-        sendHeartbeat();
+        draw();
+        // Enviar heartbeat imediatamente após health check
+        sendHeartbeat(true);
         sendLog("info", "Dispositivo iniciado e conectado");
       } else {
         Serial.println("❌ Falha na conectividade da API!");
@@ -774,8 +787,6 @@ void setup() {
         drawWiFiFailedScreen();
         return; // Não continuar se API não estiver acessível
       }
-      
-      draw();
     } else {
       Serial.println("❌ WiFi connection FAILED!");
       Serial.println("Waiting for ADMIN card to configure WiFi...");
@@ -791,7 +802,7 @@ void setup() {
 }
 
 void loop() {
-  noTone(buzzerPin); // Force buzzer off at the start of every loop
+  noTone(buzzerPin); // Forçar buzzer desligado no início de cada loop
   
   // Gerir modo de configuração WiFi
   if (wifiConfigMode) {
@@ -832,15 +843,14 @@ void loop() {
     }
   }
   
-  // Debug: Status a cada 10 segundos
+  // Debug: Status a cada 60 segundos
   static unsigned long lastDebugTime = 0;
-  if (millis() - lastDebugTime > 10000) {
+  if (millis() - lastDebugTime > 60000) {
     Serial.println("\n=== STATUS ===");
     Serial.printf("WiFi: %s\n", wifiConnected ? "CONECTADO" : "DESCONECTADO");
     Serial.printf("NFC: %s\n", nfcInitialized ? "OK" : "ERRO");
     Serial.printf("Enrollment Mode: %s\n", enrollmentMode ? "SIM" : "NAO");
     Serial.printf("Welcome Screen: %s\n", showWelcomeScreen ? "SIM" : "NAO");
-    Serial.println("Aguardando cartões...");
     lastDebugTime = millis();
   }
   
@@ -856,8 +866,8 @@ void loop() {
     }
   }
   
-  // Atualizar hora a cada segundo (apenas se WiFi ligado)
-  if (wifiConnected && millis() - lastTimeUpdate >= timeUpdateInterval) {
+  // Atualizar hora a cada segundo (apenas se WiFi ligado e não em modo de erro ou configuração)
+  if (wifiConnected && !wifiFailedMode && !wifiConfigMode && millis() - lastTimeUpdate >= timeUpdateInterval) {
     updateTime();
     lastTimeUpdate = millis();
     
@@ -892,7 +902,7 @@ void loop() {
   }
   
   // Atualizar frame de animação com efeito de salto (apenas se ligado e não mostrando outros ecrãs)
-  if (wifiConnected && !showWelcomeScreen && !wifiFailedMode && !wifiConfigMode && millis() - lastFrameTime >= frameDuration) {
+  if (wifiConnected && !showWelcomeScreen && !wifiFailedMode && !wifiConfigMode && !enrollmentMode && millis() - lastFrameTime >= frameDuration) {
     updateAnimationFrame();
     lastFrameTime = millis();
     drawConnectButtonFrame(frameIndex);
@@ -940,14 +950,6 @@ void updateWiFiDisplay() {
     tft.drawBitmap(436, 8, image_wifi_connected_bits, 38, 32, TFT_BLACK);
   } else {
     tft.drawBitmap(436, 8, image_wifi_not_connected_bits, 38, 32, TFT_BLACK);
-  }
-  
-  // Atualizar texto de estado na parte inferior
-  tft.fillRect(10, 280, 200, 10, 0xBDF7); // Limpar área de estado
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_BLACK);
-  if (!wifiConnected) {
-    tft.drawString("WiFi Disconnected", 10, 280);
   }
 }
 
@@ -1033,6 +1035,7 @@ void checkForNFC() {
       doc["uid"] = cardUID;
       doc["codigo"] = enrollmentCode;
       doc["device_id"] = deviceId;
+      doc["api_key"] = ESP32_API_KEY;
       
       String jsonString;
       serializeJson(doc, jsonString);
@@ -1121,6 +1124,7 @@ void sendUserRequest(String cardUID) {
   DynamicJsonDocument doc(1024);
   doc["uid"] = cardUID;
   doc["device_id"] = deviceId;
+  doc["api_key"] = ESP32_API_KEY;
   String jsonString;
   serializeJson(doc, jsonString);
   
@@ -1258,32 +1262,25 @@ void drawWiFiFailedScreen() {
 void drawConfigScreen() {
   tft.fillScreen(0x07E0);  // Fundo verde
   
-  // Ícone de configuração (símbolo de engrenagem)
-  tft.fillCircle(240, 80, 40, TFT_WHITE);
-  tft.setTextSize(6);
-  tft.setTextColor(0x07E0);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("*", 244, 81);
-  
   // Título
   tft.setTextSize(3);
   tft.setTextColor(TFT_WHITE);
-  tft.drawString("Modo Configuracao", 240, 150);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("Modo Configuracao", 240, 80);
   
-  // Instruções
-  tft.setTextSize(2);
-  tft.drawString("1. Ligue-se ao WiFi:", 240, 200);
+  // Nome do WiFi
   tft.setTextSize(3);
   tft.setTextColor(TFT_BLACK);
-  tft.drawString("MESAPLUS-CONFIG", 240, 225);
+  tft.drawString(apName, 240, 140);
+  
+  // Senha
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE);
-  tft.drawString("Senha: 12345678", 240, 255);
-  tft.drawString("2. Abra o seu navegador", 240, 285);
+  tft.drawString("Senha: " + apPassword, 240, 190);
 }
 
 void drawWelcomeScreen() {
-  tft.fillScreen(0xBDF7);             // Fundo
+  tft.fillScreen(0xFFFF);             // Fundo branco
   tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Barra superior
   
   // Exibir hora
@@ -1304,9 +1301,9 @@ void drawWelcomeScreen() {
   tft.setTextColor(TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
   
-  if (welcomeType == "in") {
+  if (welcomeType == "entrada" ) {
     tft.drawString("Bem vindo/a,", 240, 140);
-  } else if (welcomeType == "out") {
+  } else if (welcomeType == "saida") {
     tft.drawString("Tenha um bom dia,", 240, 140);
   } else {
     // Mensagem alternativa se o tipo for desconhecido
@@ -1333,6 +1330,8 @@ void updateTime() {
 void draw() {
   tft.fillScreen(0xBDF7);             // Fundo
   tft.fillRect(0, 51, 480, 270, 0xCE79); // Secção central
+  // Corrigir "glare" desenhando um retângulo de borda para cobrir o efeito de brilho
+  tft.drawRect(0, 51, 480, 270, 0xCE79); // Borda igual à cor do centro
   tft.fillRoundRect(177, 110, 125, 125, 20, 0xEF5D); // Base do botão
   tft.fillRect(0, 0, 480, 51, 0xEF5D);  // Barra superior
 
